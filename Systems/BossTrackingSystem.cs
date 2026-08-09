@@ -303,7 +303,7 @@ namespace BloodyBoss.Systems
             {
                 tracked.DeathDetectedAt = now;
                 MinionTrackingSystem.OnBossDeathOrDespawn(entity);
-                Plugin.BLogger.Info(LogCategory.Boss, $"[BossTracking] Boss {tracked.Model.name} health reached 0, waiting for kill confwirmation");
+                Plugin.BLogger.Info(LogCategory.Boss, $"[BossTracking] Boss {tracked.Model.name} health reached 0, waiting for kill confirmation");
             }
 
             var timeoutSeconds = PluginConfig.StuckBossRecoveryTimeoutSeconds.Value;
