@@ -43,6 +43,7 @@ namespace BloodyBoss.Systems
             public bool WasEngaged { get; set; } = false;
             public bool NeedsTeamReferenceSync { get; set; } = false;
             public TeamReference? StoredTeamReference { get; set; } = null;
+            public DateTime? DeathDetectedAt { get; set; } = null;
         }
         
         /// <summary>
@@ -157,12 +158,18 @@ namespace BloodyBoss.Systems
                     var health = entity.Read<ProjectM.Health>();
                     if (health.Value <= 0)
                     {
-                        // Boss is dead, clean up minions first
-                        MinionTrackingSystem.OnBossDeathOrDespawn(entity);
-                        entitiesToRemove.Add(entity);
+                        if (HandleBossDeath(entity, tracked, now))
+                        {
+                            entitiesToRemove.Add(entity);
+                        }
                         continue;
                     }
-                    
+
+                    if (tracked.DeathDetectedAt.HasValue)
+                    {
+                        tracked.DeathDetectedAt = null;
+                    }
+
                     // Calculate current health percentage
                     float currentHealthPercent = (health.Value / health.MaxHealth.Value) * 100f;
                     
@@ -282,8 +289,51 @@ namespace BloodyBoss.Systems
             // Update minion tracking
             MinionTrackingSystem.UpdateMinions();
         }
-        
-        
+
+        /// <summary>
+        /// Called every tick while a tracked boss's health is at or below 0 gives the
+        /// game's own kill confirmation hooks (OnDeathNpc / OnVBloodConsumed in
+        /// BossGameplayEventSystem) time to fire and reset Model.bossSpawn normally 
+        /// those only fire when the death/consume is cleanly attributed to a player
+        /// </summary>
+        /// <returns>True once this boss is finalized and should be removed from tracking</returns>
+        private static bool HandleBossDeath(Entity entity, TrackedBoss tracked, DateTime now)
+        {
+            if (tracked.DeathDetectedAt == null)
+            {
+                tracked.DeathDetectedAt = now;
+                MinionTrackingSystem.OnBossDeathOrDespawn(entity);
+                Plugin.BLogger.Info(LogCategory.Boss, $"[BossTracking] Boss {tracked.Model.name} health reached 0, waiting for kill confwirmation");
+            }
+
+            var timeoutSeconds = PluginConfig.StuckBossRecoveryTimeoutSeconds.Value;
+            if (timeoutSeconds > 0 && now - tracked.DeathDetectedAt.Value < TimeSpan.FromSeconds(timeoutSeconds))
+            {
+                return false;
+            }
+
+            if (tracked.Model.bossSpawn)
+            {
+                Plugin.BLogger.Warning(LogCategory.Boss, $"[BossTracking] Boss {tracked.Model.name} died but no kill was ever confirmed by the game forcing schedule recovery");
+
+                try
+                {
+                    BossGameplayEventSystem.UnregisterBoss(entity);
+                    tracked.Model.BuffKillers();
+                    tracked.Model.SendAnnouncementMessage();
+                }
+                catch (Exception ex)
+                {
+                    Plugin.BLogger.Error(LogCategory.Boss, $"[BossTracking] Error killing stuck boss {tracked.Model.name}: {ex.Message}");
+                    tracked.Model.bossSpawn = false;
+                    tracked.Model.bossEntity = Entity.Null;
+                    Database.saveDatabase();
+                }
+            }
+
+            return true;
+        }
+
         private static void CheckMechanics(Entity entity, TrackedBoss tracked)
         {
             try
